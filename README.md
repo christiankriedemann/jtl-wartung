@@ -1,103 +1,156 @@
 # JTL-Wartung
 
-Analyse- und Wartungsskripte für **JTL-Wawi** auf Windows-Server (RDP, Hosting z. B. bei e-comdata).
-Deckt beide üblichen Konstellationen ab:
+Fertige Skripte, um einen **JTL-Wawi-Server** (Windows, oft per RDP gehostet, z. B. bei e-comdata)
+zu **analysieren** und die **Wartung zu automatisieren** – Backups, Indexpflege, Integritätsprüfung,
+Aufräumen, geplanter Neustart.
 
-- **SQL Server Standard/Web** auf dediziertem DB-Server → Wartung über **SQL Server Agent**
-- **SQL Server Express** lokal auf dem Server → Wartung über **Windows-Aufgabenplanung** (kein Agent in Express)
-
-Alle Diagnoseskripte sind **read-only**. Wartungs-/Setup-Skripte sind als solche gekennzeichnet und melden, was sie tun.
+Du brauchst kein Vorwissen über die Skripte. Diese Seite führt dich Schritt für Schritt.
 
 ---
 
-## Inhalt
+## Was bringt mir das?
 
-```
-jtl-wartung/
-├─ powershell/
-│  ├─ Get-JtlServerHealthReport.ps1        # HTML-Gesundheitsbericht (CPU/RAM/Disk-Latenz/Dienste/Eventlog)
-│  ├─ Invoke-JtlCleanup.ps1                # Temp-/Log-Bereinigung (Vorschau, dann -Execute)
-│  ├─ Schedule-JtlReboot.ps1               # Geplanter, gewarnter Neustart (wöchentl./monatl.)
-│  ├─ Install-MaintenanceSolution-Express.ps1  # Ola Hallengren + Aufgabenplanung (EXPRESS)
-│  └─ Register-JtlScheduledTasks.ps1       # Health-Report + Cleanup als geplante Aufgaben
-└─ sql/
-   ├─ diagnose/                            # read-only Analyse (SSMS oder sqlcmd)
-   │  ├─ 01_server_config_check.sql        # max memory, Edition, MAXDOP, tempdb
-   │  ├─ 02_wait_stats.sql                 # worauf wartet SQL? (wichtigste Analyse)
-   │  ├─ 03_file_io_latency.sql            # Disk-Latenz je DB-Datei
-   │  ├─ 04_index_fragmentation.sql        # Fragmentierung (aktuelle DB)
-   │  ├─ 05_missing_indexes.sql            # fehlende Indizes + laufende Abfragen/Blocking
-   │  └─ 06_db_size_and_growth.sql         # DB-Größen, Autogrowth, Express-10-GB-Check
-   └─ setup/
-      └─ Setup-SqlAgentJobs-Standard.sql   # Ola Hallengren + SQL-Agent-Zeitpläne (STANDARD)
-```
+- **Finde die Bremse:** Warum ist die Wawi langsam? (Speicher, Festplatte, fehlende Indizes …)
+- **Sichere die Daten:** Automatische Backups, damit im Ernstfall nichts verloren geht.
+- **Halte es schnell:** Nächtliche Index- und Statistikpflege gegen schleichende Verlangsamung.
+- **Weniger Handarbeit:** Einmal einrichten, dann läuft die Wartung von allein.
 
 ---
 
-## Schnellstart: Wo liegt die Bremse?
+## Ich habe das gerade heruntergeladen – was nun?
 
-1. **SQL-Konfiguration prüfen** — `sql/diagnose/01_server_config_check.sql`
-   Häufigster Fund: `max server memory` nicht gesetzt, oder Express am 10-GB-Limit.
-2. **Wait Stats** — `02_wait_stats.sql`
-   Zeigt die Art des Engpasses (Disk / CPU / Blocking / Netzwerk).
-3. **Disk-Latenz** — `03_file_io_latency.sql` (Richtwert < 10 ms; > 20 ms = Storage-Problem).
-4. **Windows-Gesamtbild** — `powershell/Get-JtlServerHealthReport.ps1` → HTML-Report.
+Geh einfach von oben nach unten. **Schritt 1 ist gefahrlos** und der richtige Start.
 
-Ausführen per sqlcmd, z. B.:
+### Schritt 1 – Lage prüfen (ändert nichts, immer ungefährlich)
+Diese Skripte **lesen nur** und zeigen dir, wie es um den Server steht. Du kannst sie jederzeit
+und beliebig oft laufen lassen, ohne etwas kaputt zu machen.
+
+In SSMS öffnen oder per Eingabeaufforderung, z. B.:
 ```cmd
 sqlcmd -S .\SQLEXPRESS -E -i sql\diagnose\02_wait_stats.sql -o wait_stats.txt
 ```
+
+Reihenfolge bei Langsamkeit:
+1. `sql/diagnose/01_server_config_check.sql` – Grundeinstellungen (häufigster Fund: Arbeitsspeicher nicht begrenzt, oder Express am 10-GB-Limit).
+2. `sql/diagnose/02_wait_stats.sql` – worauf wartet die Datenbank? (Festplatte / CPU / Blockaden).
+3. `sql/diagnose/03_file_io_latency.sql` – Festplatte schnell genug? (gut < 10 ms, ab > 20 ms = Storage-Problem).
+4. `powershell/Get-JtlServerHealthReport.ps1` – Gesamtbild als HTML-Report (CPU, RAM, Dienste, Eventlog).
+
+### Schritt 2 – Wartung einrichten (einmalig, richtet Automatik ein)
+Hier entscheidet sich, **welche Variante** zu deinem Server passt. Wenn du es nicht weißt:
+Schritt 1 (`01_server_config_check.sql`) zeigt dir die **Edition** an.
+
+- **„Express"** in der Edition? → **Variante B** (kein Auftragsplaner in Express, läuft über Windows-Aufgaben).
+- **„Standard"/„Web"/„Enterprise"**? → **Variante A** (über den SQL Server Agent).
+
+(Details unten unter „Wartung einrichten".)
+
+### Schritt 3 – Regelmäßig draufschauen
+Den Health-Report ab und zu ansehen, Backups stichprobenartig prüfen. Fertig.
+
+---
+
+## Wichtig: Was ist gefahrlos, was verändert etwas?
+
+Es läuft **nichts von allein**. Jede Änderung passiert nur, wenn *du* ein Skript bewusst startest.
+
+| Skript | Was es tut | Verändert es etwas? |
+|---|---|---|
+| `sql/diagnose/*` | Server analysieren | **Nein** – reine Anzeige, beliebig oft ausführbar |
+| `Get-JtlServerHealthReport.ps1` | HTML-Bericht erstellen | **Nein** – liest nur (legt nur den Report-Ordner an) |
+| `Invoke-JtlCleanup.ps1` | Temp/Logs aufräumen | **Vorschau** – zeigt erst nur an; löscht **erst mit `-Execute`** |
+| `Setup-SqlAgentJobs-Standard.sql` | Backup-/Wartungs-Zeitpläne anlegen | **Ja** – richtet wiederkehrende SQL-Jobs ein |
+| `Install-MaintenanceSolution-Express.ps1` | Wartung auf Express einrichten | **Ja** – installiert Prozeduren + Windows-Aufgaben |
+| `Register-JtlScheduledTasks.ps1` | Report + Cleanup einplanen | **Ja** – plant u. a. monatliches Aufräumen **scharf** (mit `-Execute`) |
+| `Schedule-JtlReboot.ps1` | Geplanten Neustart einrichten | **Ja** – legt wiederkehrenden Server-Neustart an |
+
+Merksatz:
+- **Schritt-1-Skripte** kannst du bedenkenlos ausprobieren.
+- **Schritt-2-Skripte** richten Automatik ein. Sie fragen *im Skript* nicht noch einmal nach –
+  **der Start ist die Zusage.** Einmal in Ruhe lesen, was sie anlegen, dann ausführen.
 
 ---
 
 ## Wartung einrichten
 
-### Variante A — SQL Server Standard (dedizierter DB-Server)
-1. `MaintenanceSolution.sql` von <https://ola.hallengren.com> herunterladen und installieren
-   (mit `@CreateJobs = 'Y'`, Backup-Verzeichnis setzen).
-2. `sql/setup/Setup-SqlAgentJobs-Standard.sql` ausführen → legt die Zeitpläne an
-   (FULL-Backup täglich 02:00, IndexOptimize täglich 03:00, CHECKDB So 04:00).
+### Variante A – SQL Server Standard (dedizierter DB-Server, mit SQL Agent)
+1. `MaintenanceSolution.sql` von <https://ola.hallengren.com> herunterladen
+   (Industriestandard, kostenlos) und in SSMS gegen die `master`-Datenbank ausführen –
+   mit `@CreateJobs = 'Y'` und gesetztem Backup-Verzeichnis.
+2. `sql/setup/Setup-SqlAgentJobs-Standard.sql` ausführen → legt die Zeitpläne an:
+   FULL-Backup täglich 02:00, Indexpflege täglich 03:00, CHECKDB sonntags 04:00.
 
-### Variante B — SQL Server Express (lokal, kein Agent)
+### Variante B – SQL Server Express (lokal, ohne SQL Agent)
+Express hat keinen Auftragsplaner – die Wartung läuft hier über Windows-Aufgaben:
 ```powershell
 .\powershell\Install-MaintenanceSolution-Express.ps1 `
     -SqlInstance ".\SQLEXPRESS" `
     -BackupDirectory "D:\SQLBackup" `
     -MaintenanceSolutionPath "C:\temp\MaintenanceSolution.sql"
 ```
-Legt dieselbe Wartung als **Windows-Aufgaben** (`JTL_SQL_*`) an.
+Legt dieselbe Wartung als Windows-Aufgaben (`JTL_SQL_*`) an.
 
-### Windows-seitige Aufgaben (beide Varianten)
+### Windows-Aufgaben (für beide Varianten sinnvoll)
 ```powershell
 .\powershell\Register-JtlScheduledTasks.ps1 -SqlInstance ".\SQLEXPRESS"   # Health-Report + Cleanup
 .\powershell\Schedule-JtlReboot.ps1 -Schedule Monthly -DayOfMonth 7 -At 03:00
 ```
 
+> PowerShell **als Administrator** starten. Falls die Ausführung blockiert wird:
+> `powershell -ExecutionPolicy Bypass -File <Skript>`
+
 ---
 
 ## Empfohlener Rhythmus
 
-| Aufgabe | Häufigkeit | Werkzeug |
-|---|---|---|
-| FULL-Backup | täglich (nachts) | Ola Hallengren (Agent / Task) |
-| Index- & Statistikpflege | täglich (nachts) | Ola Hallengren |
-| DBCC CHECKDB (Integrität) | wöchentlich | Ola Hallengren |
-| Health-Report (HTML) | wöchentlich | `Get-JtlServerHealthReport.ps1` |
-| Temp-/Log-Bereinigung | monatlich | `Invoke-JtlCleanup.ps1` |
-| Windows Update + Reboot | monatlich (nach Patchday) | `Schedule-JtlReboot.ps1` |
-| Reboot bei reinem RDP-Server | ggf. wöchentlich | `Schedule-JtlReboot.ps1 -Schedule Weekly` |
-| JTL-eigene „Datenbankwartung“ | monatlich / bei Bedarf | in JTL-Wawi |
+| Aufgabe | Wie oft | Womit | Verändert? |
+|---|---|---|:--:|
+| FULL-Backup | täglich (nachts) | Ola Hallengren (Agent / Aufgabe) | ✅ |
+| Index- & Statistikpflege | täglich (nachts) | Ola Hallengren | ✅ |
+| Integritätsprüfung (CHECKDB) | wöchentlich | Ola Hallengren | ✅ |
+| Health-Report (HTML) | wöchentlich | `Get-JtlServerHealthReport.ps1` | – |
+| Temp-/Log-Bereinigung | monatlich | `Invoke-JtlCleanup.ps1` | ✅ (mit `-Execute`) |
+| Windows Update + Reboot | monatlich (nach Patchday) | `Schedule-JtlReboot.ps1` | ✅ |
+| Reboot bei reinem RDP-Server | ggf. wöchentlich | `Schedule-JtlReboot.ps1 -Schedule Weekly` | ✅ |
+| Lage prüfen / Engpass suchen | bei Bedarf | `sql/diagnose/*` | – |
+| JTL-eigene „Datenbankwartung" | monatlich / bei Bedarf | in JTL-Wawi | ✅ |
+
+„✅" = richtet etwas ein bzw. ändert etwas · „–" = reine Analyse, ungefährlich.
 
 ---
 
-## Hinweise
+## Was im Ordner liegt
 
-- PowerShell-Skripte als **Administrator** ausführen; bei Bedarf
-  `powershell -ExecutionPolicy Bypass -File <Skript>`.
-- **Express-Besonderheiten:** kein SQL Agent, max. 10 GB pro DB, ~1,4 GB Buffer Pool,
-  max. 4 Kerne / 1 Socket — bei anhaltender Langsamkeit ist der Wechsel auf Standard zu prüfen.
-- **Virenscanner:** `.mdf`/`.ldf`/`.ndf` sowie JTL-Verzeichnisse von der Echtzeitprüfung ausnehmen.
-- **Energieplan** auf „Höchstleistung“ stellen (`powercfg /setactive SCHEME_MIN`).
-- Index-Vorschläge aus `05_missing_indexes.sql` **nicht blind** übernehmen — bei JTL im Zweifel
+```
+jtl-wartung/
+├─ powershell/
+│  ├─ Get-JtlServerHealthReport.ps1            # HTML-Gesundheitsbericht (read-only)
+│  ├─ Invoke-JtlCleanup.ps1                    # Temp-/Log-Bereinigung (Vorschau, dann -Execute)
+│  ├─ Schedule-JtlReboot.ps1                   # Geplanter, gewarnter Neustart
+│  ├─ Install-MaintenanceSolution-Express.ps1  # Ola Hallengren + Aufgabenplanung (EXPRESS)
+│  └─ Register-JtlScheduledTasks.ps1           # Health-Report + Cleanup einplanen
+└─ sql/
+   ├─ diagnose/                                # read-only Analyse (SSMS oder sqlcmd)
+   │  ├─ 01_server_config_check.sql            # Speicher, Edition, MAXDOP, tempdb
+   │  ├─ 02_wait_stats.sql                     # worauf wartet SQL? (wichtigste Analyse)
+   │  ├─ 03_file_io_latency.sql                # Festplatten-Latenz je DB-Datei
+   │  ├─ 04_index_fragmentation.sql            # Fragmentierung (aktuelle DB)
+   │  ├─ 05_missing_indexes.sql                # fehlende Indizes + Blocking
+   │  └─ 06_db_size_and_growth.sql             # DB-Größen, Autogrowth, Express-10-GB-Check
+   └─ setup/
+      └─ Setup-SqlAgentJobs-Standard.sql       # SQL-Agent-Zeitpläne (STANDARD)
+```
+
+---
+
+## Gute zu wissen
+
+- **Express-Grenzen:** kein SQL Agent, max. 10 GB pro Datenbank, ~1,4 GB Arbeitsspeicher,
+  max. 4 Kerne. Bei dauerhafter Langsamkeit lohnt der Wechsel auf Standard.
+- **Virenscanner:** `.mdf`/`.ldf`/`.ndf` und JTL-Verzeichnisse von der Echtzeitprüfung ausnehmen.
+- **Energieplan** auf „Höchstleistung" stellen (`powercfg /setactive SCHEME_MIN`).
+- **Index-Vorschläge** aus `05_missing_indexes.sql` **nicht blind** übernehmen – bei JTL im Zweifel
   mit dem JTL-Support abstimmen.
-- Die Backup-/Reboot-Zeiten in den Skripten an euer Wartungsfenster anpassen.
+- **Zeiten anpassen:** Backup- und Reboot-Zeiten in den Skripten an euer Wartungsfenster legen.
+- **Wieder entfernen:** Geplante Aufgaben lassen sich rückstandslos löschen, z. B.
+  `Unregister-ScheduledTask -TaskName JTL_GeplanterNeustart`.
