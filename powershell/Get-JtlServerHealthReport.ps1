@@ -23,12 +23,22 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$OutputPath = (Join-Path $PSScriptRoot 'reports'),
+    [string]$OutputPath,
     [string]$SqlInstance,
     [int]$EventHours = 24
 )
 
 $ErrorActionPreference = 'Continue'
+
+# Skriptverzeichnis robust ermitteln ($PSScriptRoot ist je nach PowerShell-Version/Startart leer)
+if (-not $OutputPath) {
+    $scriptDir = if ($PSScriptRoot)               { $PSScriptRoot }
+                 elseif ($PSCommandPath)          { Split-Path -Parent $PSCommandPath }
+                 elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path }
+                 else                             { (Get-Location).Path }
+    $OutputPath = Join-Path $scriptDir 'reports'
+}
+
 $timestamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
 if (-not (Test-Path $OutputPath)) { New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null }
 $reportFile = Join-Path $OutputPath "JTL-Health_$($env:COMPUTERNAME)_$timestamp.html"
@@ -80,29 +90,23 @@ foreach ($d in $disks) {
     }
 }
 
-# Disk-Latenz ueber Performance-Counter (Mittel ueber kurze Messreihe)
+# Disk-Latenz ueber WMI-Performance-Klasse (sprachunabhaengig - Get-Counter-Namen sind
+# auf deutschem Windows lokalisiert und wuerden sonst fehlschlagen)
 try {
-    $counters = @('\PhysicalDisk(_Total)\Avg. Disk sec/Read',
-                  '\PhysicalDisk(_Total)\Avg. Disk sec/Write',
-                  '\PhysicalDisk(_Total)\Current Disk Queue Length')
-    $sample = Get-Counter -Counter $counters -SampleInterval 1 -MaxSamples 3 -ErrorAction Stop
-    $avg = $sample.CounterSamples | Group-Object Path | ForEach-Object {
-        [pscustomobject]@{
-            Zaehler   = ($_.Name -split '\\')[-1]
-            Mittelwert = [math]::Round(($_.Group | Measure-Object CookedValue -Average).Average, 4)
-        }
+    $perf = Get-CimInstance Win32_PerfFormattedData_PerfDisk_PhysicalDisk -ErrorAction Stop |
+            Where-Object { $_.Name -eq '_Total' } | Select-Object -First 1
+    if ($perf) {
+        $latency = @(
+            [pscustomobject]@{ Messwert = 'Avg. Disk sec/Read';        Wert_ms = [math]::Round($perf.AvgDisksecPerRead  * 1000, 1) }
+            [pscustomobject]@{ Messwert = 'Avg. Disk sec/Write';       Wert_ms = [math]::Round($perf.AvgDisksecPerWrite * 1000, 1) }
+            [pscustomobject]@{ Messwert = 'Current Disk Queue Length'; Wert_ms = $perf.CurrentDiskQueueLength }
+        )
+        Add-Section 'Datentraeger - Latenz (Richtwert &lt; 10 ms gut, &gt; 20 ms kritisch)' $latency
+    } else {
+        $sections.Add("<p class='warn'>Disk-Latenz: keine _Total-Instanz gefunden.</p>")
     }
-    # Latenzen von Sekunden in ms umrechnen fuer die beiden sec/-Counter
-    $latency = $avg | ForEach-Object {
-        if ($_.Zaehler -like 'avg. disk sec*') {
-            [pscustomobject]@{ Messwert = $_.Zaehler; Wert_ms = [math]::Round($_.Mittelwert * 1000, 1) }
-        } else {
-            [pscustomobject]@{ Messwert = $_.Zaehler; Wert_ms = $_.Mittelwert }
-        }
-    }
-    Add-Section 'Datentraeger - Latenz (Richtwert &lt; 10 ms gut, &gt; 20 ms kritisch)' $latency
 } catch {
-    $sections.Add("<p class='warn'>Disk-Latenz-Counter nicht verfuegbar: $($_.Exception.Message)</p>")
+    $sections.Add("<p class='warn'>Disk-Latenz nicht verfuegbar: $($_.Exception.Message)</p>")
 }
 
 # --- Top-Prozesse -------------------------------------------------------------
@@ -148,7 +152,7 @@ FROM sys.master_files GROUP BY database_id ORDER BY Gesamt_MB DESC;
     try {
         $sqlcmdAvailable = Get-Command sqlcmd -ErrorAction SilentlyContinue
         if ($sqlcmdAvailable) {
-            $raw = sqlcmd -S $SqlInstance -E -h -1 -W -s "|" -Q $query 2>&1
+            $raw = sqlcmd -S $SqlInstance -E -l 10 -t 30 -h -1 -W -s "|" -Q $query 2>&1
             $sections.Add("<h2>SQL: Datenbankgroessen ($SqlInstance)</h2><pre>$($raw -join "`n")</pre>")
         } else {
             $sections.Add("<p class='warn'>sqlcmd nicht gefunden - SQL-Teil uebersprungen.</p>")
