@@ -91,8 +91,11 @@ foreach ($d in $disks) {
 }
 
 # Disk-Latenz ueber WMI-Performance-Klasse (sprachunabhaengig - Get-Counter-Namen sind
-# auf deutschem Windows lokalisiert und wuerden sonst fehlschlagen)
+# auf deutschem Windows lokalisiert und wuerden sonst fehlschlagen).
+# Zwei Abrufe ~1s auseinander: der erste "primt" die Zaehler, sonst kaeme 0 zurueck.
 try {
+    Get-CimInstance Win32_PerfFormattedData_PerfDisk_PhysicalDisk -ErrorAction Stop | Out-Null
+    Start-Sleep -Milliseconds 1000
     $perf = Get-CimInstance Win32_PerfFormattedData_PerfDisk_PhysicalDisk -ErrorAction Stop |
             Where-Object { $_.Name -eq '_Total' } | Select-Object -First 1
     if ($perf) {
@@ -125,15 +128,28 @@ $services = Get-Service | Where-Object {
 } | Select-Object Name, DisplayName, Status, StartType -Unique
 if ($services) { Add-Section 'JTL- / SQL-Dienste' $services }
 
-# --- Eventlog: kritische Eintraege --------------------------------------------
+# --- Eventlog: kritische Eintraege (gruppiert nach Haeufigkeit) ----------------
+# Statt 30 Rohzeilen: nach Quelle+EventId+Stufe gruppieren und zaehlen, damit
+# wiederkehrende Fehler ("erscheint 240x") sofort sichtbar werden.
 $since = (Get-Date).AddHours(-$EventHours)
 try {
-    $events = Get-WinEvent -FilterHashtable @{ LogName='System','Application'; Level=1,2; StartTime=$since } -ErrorAction Stop |
-        Select-Object TimeCreated, LogName, Id, ProviderName,
-            @{n='Meldung';e={ ($_.Message -split "`n")[0].Substring(0, [math]::Min(160, ($_.Message -split "`n")[0].Length)) }} |
-        Select-Object -First 30
-    if ($events) {
-        Add-Section "Eventlog - Fehler/Kritisch (letzte $EventHours h)" $events
+    $raw = Get-WinEvent -FilterHashtable @{ LogName='System','Application'; Level=1,2; StartTime=$since } -ErrorAction Stop
+    if ($raw) {
+        $grouped = $raw | Group-Object LogName, ProviderName, Id, LevelDisplayName | ForEach-Object {
+            $latest = $_.Group | Sort-Object TimeCreated -Descending | Select-Object -First 1
+            $msg = if ($latest.Message) { ($latest.Message -split "`r?`n")[0] } else { '(kein Meldungstext)' }
+            if ($msg.Length -gt 160) { $msg = $msg.Substring(0, 160) }
+            [pscustomobject]@{
+                Anzahl    = $_.Count
+                Protokoll = $latest.LogName
+                Quelle    = $latest.ProviderName
+                EventId   = $latest.Id
+                Stufe     = $latest.LevelDisplayName
+                Zuletzt   = $latest.TimeCreated
+                Beispiel  = $msg
+            }
+        } | Sort-Object Anzahl -Descending | Select-Object -First 25
+        Add-Section "Eventlog - Fehler/Kritisch gruppiert (letzte $EventHours h)" $grouped
     } else {
         $sections.Add("<p>Keine kritischen Eventlog-Eintraege in den letzten $EventHours h.</p>")
     }
@@ -152,8 +168,20 @@ FROM sys.master_files GROUP BY database_id ORDER BY Gesamt_MB DESC;
     try {
         $sqlcmdAvailable = Get-Command sqlcmd -ErrorAction SilentlyContinue
         if ($sqlcmdAvailable) {
-            $raw = sqlcmd -S $SqlInstance -E -l 10 -t 30 -h -1 -W -s "|" -Q $query 2>&1
-            $sections.Add("<h2>SQL: Datenbankgroessen ($SqlInstance)</h2><pre>$($raw -join "`n")</pre>")
+            # sqlcmd in einem Hintergrund-Job mit hartem Timeout, damit ein haengender
+            # Verbindungsversuch den ganzen Report nicht blockiert.
+            $job = Start-Job -ScriptBlock {
+                param($inst, $q)
+                sqlcmd -S $inst -E -l 10 -t 30 -h -1 -W -s "|" -Q $q 2>&1
+            } -ArgumentList $SqlInstance, $query
+            if (Wait-Job $job -Timeout 40) {
+                $raw = Receive-Job $job
+                $sections.Add("<h2>SQL: Datenbankgroessen ($SqlInstance)</h2><pre>$($raw -join "`n")</pre>")
+            } else {
+                Stop-Job $job
+                $sections.Add("<p class='warn'>SQL-Abfrage nach 40s abgebrochen - SqlInstance pruefen oder Parameter weglassen.</p>")
+            }
+            Remove-Job $job -Force -ErrorAction SilentlyContinue
         } else {
             $sections.Add("<p class='warn'>sqlcmd nicht gefunden - SQL-Teil uebersprungen.</p>")
         }
