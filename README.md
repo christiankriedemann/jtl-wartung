@@ -8,6 +8,23 @@ Du brauchst kein Vorwissen über die Skripte. Diese Seite führt dich Schritt f�
 
 ---
 
+> ## ⚠️ Bitte zuerst lesen – Nutzung auf eigene Gefahr
+>
+> - **Einsatz auf eigenes Risiko.** Diese Skripte werden „wie besehen", **ohne jede Gewähr**
+>   bereitgestellt. Es wird keine Haftung für Schäden, Datenverlust oder Ausfälle übernommen,
+>   die aus der Nutzung entstehen.
+> - **Verstehen vor Ausführen.** Setze nur ein, was du nachvollziehen kannst. Lies, was ein
+>   Skript tut, bevor du es startest. Die Tabelle [„Was ist gefahrlos, was verändert etwas?"](#wichtig-was-ist-gefahrlos-was-verändert-etwas)
+>   zeigt, welche Skripte nur lesen und welche etwas verändern.
+> - **Immer vorher ein Backup.** Vor jeder verändernden Aktion (Wartung einrichten, Aufräumen,
+>   Neustart planen) eine **geprüfte, wiederherstellbare Datensicherung** anlegen.
+> - **Erst testen, dann produktiv.** Wenn möglich zuerst auf einem Test-/Spiegelsystem ausprobieren,
+>   nicht direkt auf dem Live-Server.
+> - **Du bist verantwortlich.** Du allein bist für den Betrieb deines Servers, die Einhaltung der
+>   Lizenz-/Supportbedingungen von JTL und Microsoft sowie für eventuelle Folgen verantwortlich.
+
+---
+
 ## Was bringt mir das?
 
 - **Finde die Bremse:** Warum ist die Wawi langsam? (Speicher, Festplatte, fehlende Indizes …)
@@ -154,3 +171,13 @@ jtl-wartung/
 - **Zeiten anpassen:** Backup- und Reboot-Zeiten in den Skripten an euer Wartungsfenster legen.
 - **Wieder entfernen:** Geplante Aufgaben lassen sich rückstandslos löschen, z. B.
   `Unregister-ScheduledTask -TaskName JTL_GeplanterNeustart`.
+
+---
+
+## Rechtliches
+
+Bereitstellung **ohne Gewähr und ohne Haftung** (siehe Hinweis oben). Nutzung auf eigene Gefahr.
+Die Wartungslösung **MaintenanceSolution.sql** stammt von [Ola Hallengren](https://ola.hallengren.com)
+und unterliegt deren eigener Lizenz; sie ist hier **nicht** enthalten und muss separat geladen werden.
+„JTL-Wawi" ist ein Produkt der JTL-Software GmbH, „SQL Server" ein Produkt von Microsoft –
+beide stehen in keiner Verbindung zu diesem Repository.

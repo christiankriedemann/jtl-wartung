@@ -1,0 +1,40 @@
+# --- Generierte Diagnose-/Report-Ausgaben (können Serverdaten enthalten!) ---
+*.html
+*.htm
+wait_stats.txt
+*_out.txt
+*.out
+reports/
+JTL-Wartung/
+
+# --- Drittanbieter, separat herunterladen (nicht mitliefern) ---
+MaintenanceSolution.sql
+
+# --- Datenbank-Artefakte / Backups (nie ins Repo) ---
+*.bak
+*.trn
+*.mdf
+*.ldf
+*.ndf
+*.dmp
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Lokale/geheime Konfiguration ---
+*.env
+.env
+*.secret
+*secrets*
+*.local.ps1
+*credentials*
+
+# --- Betriebssystem-/Editor-Müll ---
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.vscode/
+.idea/
