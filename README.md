@@ -113,6 +113,19 @@ Legt dieselbe Wartung als Windows-Aufgaben (`JTL_SQL_*`) an.
 .\powershell\Schedule-JtlReboot.ps1 -Schedule Monthly -DayOfMonth 7 -At 03:00
 ```
 
+### Dauer-Monitor (CPU/RAM/Disk/Top-Prozesse, tageweise CSV)
+Für Fälle, in denen Probleme „immer mal" auftreten und niemand den Moment live erwischt:
+Der Monitor sampelt im Hintergrund (Standard alle 60 s) und schreibt CSV-Dateien je Tag.
+Auswertung anschließend in Excel.
+```powershell
+# einmalig einrichten (als Administrator) - laeuft danach als Aufgabe unter SYSTEM,
+# ueberlebt Logoff/Reboot, startet bei Fehler neu:
+.\powershell\Register-JtlMonitorTask.ps1                          # ohne SQL (z. B. direct)
+.\powershell\Register-JtlMonitorTask.ps1 -SqlInstance ".\JTLWAWI" # mit SQL-Live-Daten (z. B. inlet)
+```
+CSV-Dateien liegen unter `C:\JTL-Wartung\monitor\` und werden nach 14 Tagen automatisch
+aufgeräumt.
+
 > PowerShell **als Administrator** starten. Falls die Ausführung blockiert wird:
 > `powershell -ExecutionPolicy Bypass -File <Skript>`
 
@@ -130,6 +143,7 @@ Legt dieselbe Wartung als Windows-Aufgaben (`JTL_SQL_*`) an.
 | Windows Update + Reboot | monatlich (nach Patchday) | `Schedule-JtlReboot.ps1` | ✅ |
 | Reboot bei reinem RDP-Server | ggf. wöchentlich | `Schedule-JtlReboot.ps1 -Schedule Weekly` | ✅ |
 | Lage prüfen / Engpass suchen | bei Bedarf | `sql/diagnose/*` | – |
+| Last & Verursacher mitschreiben | dauerhaft im Hintergrund | `Register-JtlMonitorTask.ps1` | – (nur Logs) |
 | JTL-eigene „Datenbankwartung" | monatlich / bei Bedarf | in JTL-Wawi | ✅ |
 
 „✅" = richtet etwas ein bzw. ändert etwas · „–" = reine Analyse, ungefährlich.
@@ -142,6 +156,8 @@ Legt dieselbe Wartung als Windows-Aufgaben (`JTL_SQL_*`) an.
 jtl-wartung/
 ├─ powershell/
 │  ├─ Get-JtlServerHealthReport.ps1            # HTML-Gesundheitsbericht (read-only)
+│  ├─ Start-JtlMonitor.ps1                     # Dauer-Monitor (CSV je Tag, read-only)
+│  ├─ Register-JtlMonitorTask.ps1              # Monitor als Aufgabe unter SYSTEM einrichten
 │  ├─ Invoke-JtlCleanup.ps1                    # Temp-/Log-Bereinigung (Vorschau, dann -Execute)
 │  ├─ Schedule-JtlReboot.ps1                   # Geplanter, gewarnter Neustart
 │  ├─ Install-MaintenanceSolution-Express.ps1  # Ola Hallengren + Aufgabenplanung (EXPRESS)
